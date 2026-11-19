@@ -1,0 +1,149 @@
+# Meme coin trading bot — every threshold lives here. Nothing is hard-coded.
+# Every number is a *default*: a starting point, not a law. Tune it from the
+# trade journal, one threshold at a time, judged over 20+ new trades.
+
+mode: paper            # paper | live. Live ALSO requires typing "LIVE MODE ON" at the prompt.
+chain: solana
+capital_usd: 1000      # Money you can afford to lose entirely. Never rent, bills, savings or borrowed money.
+
+data:
+  max_age_sec: 300           # refresh any data point older than this before a decision
+  retries: 3
+  backoff_base_sec: 1.0      # 1s, 2s, 4s ...
+  timeout_sec: 10
+  discovery_limit: 30        # how many raw candidates to pull per scan before filtering
+  rate_limits_per_min:       # stay under each free API's published limit
+    api.geckoterminal.com: 25
+    api.dexscreener.com: 250
+    api.rugcheck.xyz: 60
+    lite-api.jup.ag: 50
+
+loop:
+  scan_interval_min: 5
+  monitor_interval_min: 1
+  state_dir: state
+  journal_dir: journal
+  daily_summary_hour_utc: 0
+
+risk:
+  max_position_pct: 2.0          # per coin, of trading capital — whole position counts as at risk
+  max_total_exposure_pct: 10.0   # across all open memecoin positions
+  max_open_positions: 5
+  daily_loss_limit_pct: 3.0      # hit it -> no new entries for daily_loss_pause_hours
+  daily_loss_pause_hours: 24
+  drawdown_breaker_pct: 15.0     # from account peak -> halt entries until human reviews
+  reentry_cooldown_hours: 2      # no re-entry of an exited token without a fresh full cycle
+
+scout:
+  max_candidates: 5
+  min_liquidity_usd: 50000
+  min_age_min: 30
+  min_vol_1h_usd: 25000
+  min_holders: 300
+  max_24h_multiple: 10           # skip >10x in 24h ...
+  range_hold_hours: 4            # ... unless it has held a range this long since
+  range_hold_max_width_pct: 60   # what counts as "held a range"
+  priority_score: 75             # >= goes to Gatekeeper first
+  watchlist_score: 60            # 60-74 goes as watchlist; below is dropped
+  vertical_candle_pct: 30        # a single 5m candle body above this = "vertical candle"
+  min_liq_to_mcap_pct: 10
+  proven_wallets_full: 2         # wallets with verified 30d+ records needed for full points
+  # Narrative fit is YOUR judgment of the current themes. Edit this list weekly.
+  # An empty list makes narrative fit UNKNOWN (0 points).
+  narratives: [ai, agent, gpt, dog, inu, cat, frog, pepe]
+  weights:
+    momentum: 20
+    holder_growth: 20
+    proven_wallets: 15
+    narrative: 15
+    social: 15
+    liquidity: 15
+
+gatekeeper:
+  max_sell_tax_pct: 10
+  min_lp_locked_pct: 95          # LP burned/locked share required
+  min_lp_lock_days: 30           # a lock ending sooner is a hard fail
+  max_single_wallet_pct: 10      # excluding LP pool, burn and known programs
+  top10_high_risk_pct: 30
+  insider_high_risk_pct: 20
+  min_liq_to_mcap_pct: 10
+  min_deployer_age_days: 7
+  unique_trader_ratio_low: 0.2   # unique traders / tx count below this smells like wash trading
+  weights:
+    holder_concentration: 20
+    insider_sniper: 20
+    liquidity_health: 15
+    volume_authenticity: 15
+    deployer_history: 10
+    social_authenticity: 10
+    market_context: 10
+  tiers:                          # risk score -> verdict, tier, size multiplier
+    - {max_score: 30,  verdict: PASS,    tier: A, size_multiplier: 1.0}
+    - {max_score: 50,  verdict: PASS,    tier: B, size_multiplier: 0.6}
+    - {max_score: 65,  verdict: CAUTION, tier: C, size_multiplier: 0.3}
+    - {max_score: 100, verdict: REJECT,  tier: null, size_multiplier: 0.0}
+  recheck_interval_min: 15
+  reject_memory_hours: 24        # a REJECTed token is discarded for this long — no overrides
+  thesis_killers:
+    dev_sell_pct: 25
+    liquidity_drop_pct: 20
+    liquidity_drop_window_min: 10
+
+entry:
+  max_gatekeeper_age_min: 15
+  max_data_age_min: 5
+  max_buy_impact_pct: 1.0
+  max_sell_impact_pct: 3.0
+  default_slippage_pct: 3.0
+  max_slippage_pct: 5.0
+  mev_protection: true
+  risk_per_trade_pct: 0.5        # r in the size formula
+  max_pool_share_pct: 1.0        # position <= 1% of main pool liquidity
+  min_reward_to_risk: {A: 2.0, B: 2.0, C: 3.0}
+  max_stop_distance_pct: 35
+  max_15m_rise_pct: 50
+  pullback_min_retrace_pct: 30
+  pullback_max_retrace_pct: 50
+  pullback_volume_dryup_ratio: 0.6   # recent volume / up-move volume below this = drying up
+  breakout_volume_mult: 1.5
+  retest_tolerance_pct: 3
+  range_min_hours: 2
+  range_max_width_pct: 35
+  volume_expansion_mult: 1.5
+  stop_buffer_pct: 2
+  tranche_split_pct: [50, 50]
+  tranche2_confirm_min: 15
+  plan_expiry_min: 30
+
+exit:
+  emergency_liq_drop_pct: 20
+  emergency_liq_window_min: 10
+  ladder_first_target_sell_pct: 30
+  ladder_double_multiple: 2.0     # at 2x sell enough that total sales recover full cost
+  ladder_triple_multiple: 3.0
+  ladder_triple_sell_pct_of_original: 25
+  trail_from_high_close_pct: 30
+  trail_activates_after: first_target   # first_target | triple
+  decay_volume_drop_pct: 60
+  decay_buy_sell_ratio: 0.8
+  decay_ratio_window_min: 30
+  decay_holder_fall_window_min: 60
+  decay_social_drop_pct: 50
+  decay_trim_pct: 50
+  time_stop_hours: 4
+  time_stop_progress_frac: 0.25   # "progress" = reached 25% of the way to first target
+  normal_chunk_max_impact_pct: 1.0
+  emergency_max_slippage_pct: 15
+
+broker:
+  swap_fee_pct: 0.25
+  network_fee_usd: 0.01
+
+journal:
+  rejection_sample_rate: 0.25
+  rejection_followup_hours: 24
+
+review:
+  min_trades_per_change: 20
+  min_paper_trades_for_live: 50
+  live_half_size_trades: 50
