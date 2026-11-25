@@ -140,6 +140,7 @@ class Orchestrator:
 
         records, results = self.scout.scan(list(snaps.values()), now, known_symbols)
         rep.scout_passed = len(records)
+        self._log_scan(len(addrs), len(survivors), results)
         for r in results:
             if not r.passed:
                 self.journal.maybe_sample_rejection(now, r.snapshot.address, r.snapshot.symbol, "scout", r.snapshot.price_usd, r.dropped)
@@ -183,6 +184,22 @@ class Orchestrator:
             self._attach_entry_safety(snap.address, safety)
 
         await self._work_plans(now, rep)
+
+    def _log_scan(self, found: int, survived: int, results) -> None:
+        """One readable line per scan, so a quiet market is visibly working, not silent."""
+        import re
+        from collections import Counter
+
+        drops = Counter()
+        for r in results:
+            for d in r.dropped[:1]:
+                drops[re.sub(r"[\d,.]+", "#", d.split(" — ")[0].split(":")[0])[:40]] += 1
+        scored = [((r.block.potential_score if r.passed else _score_of(r)), r.snapshot.symbol) for r in results]
+        scored = sorted(x for x in scored if x[0] is not None)
+        best = ", ".join(f"{sym} {sc}" for sc, sym in reversed(scored[-3:]))
+        log.info("SCAN       found %d, %d past prefilter, %d to Gatekeeper | best: %s | drops: %s",
+                 found, survived, sum(r.passed for r in results), best or "-",
+                 "; ".join(f"{k} x{v}" for k, v in drops.most_common(3)) or "-")
 
     def _prefilter(self, s: TokenSnapshot) -> bool:
         """Cheap filters on light data before paying for candles. Unknowns pass to the full check."""
@@ -452,3 +469,10 @@ def _pos_from_json(d: dict) -> Position:
         d[k] = datetime.fromisoformat(d[k]) if d.get(k) else None
     d["fills"] = [Fill(**{**f, "ts": datetime.fromisoformat(f["ts"])}) for f in d["fills"]]
     return Position(**d)
+
+
+def _score_of(result) -> int | None:
+    for d in result.dropped:
+        if d.startswith("potential score "):
+            return int(d.split()[2])
+    return None
