@@ -65,7 +65,8 @@ class Http:
                 if resp.status_code == 429:
                     # rate limited: wait out the window (Retry-After if given), not a 1-2s blip
                     retry_after = _f(resp.headers.get("Retry-After"))
-                    wait = retry_after if retry_after is not None else self.rate_limit_wait * (attempt + 1)
+                    # GeckoTerminal sends "Retry-After: 0"; treat a non-positive value as absent
+                    wait = retry_after if retry_after and retry_after > 0 else self.rate_limit_wait * (attempt + 1)
                     log.warning("GET %s -> 429, waiting %.0fs (attempt %d)", host, wait, attempt + 1)
                     await asyncio.sleep(wait)
                     continue
