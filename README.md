@@ -17,7 +17,8 @@ execution is deliberately not built (see [Going live](#going-live)).
 ## Quick start
 
 ```bash
-cd memebot
+git clone https://github.com/zakarjoon/Memebot_Zak.git
+cd Memebot_Zak
 pip install -e ".[dev]"
 ```
 
