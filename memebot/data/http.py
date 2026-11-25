@@ -13,6 +13,13 @@ from ..models import UNKNOWN
 log = logging.getLogger("memebot.http")
 
 
+def _f(x) -> float | None:
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return None
+
+
 class RateLimiter:
     """Minimum interval between calls to one host."""
 
@@ -30,7 +37,9 @@ class RateLimiter:
 
 
 class Http:
-    def __init__(self, timeout: float, retries: int, backoff: float, limits: dict[str, int] | None = None, transport=None):
+    def __init__(self, timeout: float, retries: int, backoff: float, limits: dict[str, int] | None = None, transport=None,
+                 rate_limit_wait: float = 20.0):
+        self.rate_limit_wait = rate_limit_wait
         self.client = httpx.AsyncClient(timeout=timeout, transport=transport,
                                         headers={"User-Agent": "memebot/0.1", "Accept": "application/json"})
         self.retries = retries
@@ -53,7 +62,14 @@ class Http:
                     except ValueError:
                         body = resp.text
                     return {"_status": resp.status_code, "_body": body}
-                if resp.status_code not in (429, 500, 502, 503, 504):
+                if resp.status_code == 429:
+                    # rate limited: wait out the window (Retry-After if given), not a 1-2s blip
+                    retry_after = _f(resp.headers.get("Retry-After"))
+                    wait = retry_after if retry_after is not None else self.rate_limit_wait * (attempt + 1)
+                    log.warning("GET %s -> 429, waiting %.0fs (attempt %d)", host, wait, attempt + 1)
+                    await asyncio.sleep(wait)
+                    continue
+                if resp.status_code not in (500, 502, 503, 504):
                     log.warning("GET %s -> %s", url, resp.status_code)
                     return UNKNOWN
             except (httpx.HTTPError, ValueError) as exc:

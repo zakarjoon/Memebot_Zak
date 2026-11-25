@@ -25,7 +25,7 @@ def pair(addr=MINT, symbol="EXAMPLE", liq=120000.0, price="0.00042"):
     }
 
 
-def handler(fail_rugcheck=False, no_route=False):
+def handler(fail_rugcheck=False, no_route=False, rugcheck_extra=None, rate_limited=None):
     now = int(time.time())
     def h(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
@@ -34,7 +34,10 @@ def handler(fail_rugcheck=False, no_route=False):
         if "trending_pools" in url or "new_pools" in url:
             return httpx.Response(200, json={"data": [{"relationships": {"base_token": {"data": {"id": f"solana_{MINT}"}}}}]})
         if f"/tokens/v1/solana/{SOL}" in url:
-            return httpx.Response(200, json=[{"priceUsd": "150", "liquidity": {"usd": 9e6}, "priceChange": {"h24": 1.5}}])
+            return httpx.Response(200, json=[
+                {"baseToken": {"address": "USDCxx"}, "priceUsd": "1.0", "liquidity": {"usd": 9e9}},  # SOL as quote: must be ignored
+                {"baseToken": {"address": SOL}, "priceUsd": "150", "liquidity": {"usd": 9e6}, "priceChange": {"h24": 1.5}},
+            ])
         if "/tokens/v1/solana/" in url:
             return httpx.Response(200, json=[pair(liq=5000.0), pair()])
         if "ohlcv" in url:
@@ -46,7 +49,7 @@ def handler(fail_rugcheck=False, no_route=False):
         if "rugcheck" in url:
             if fail_rugcheck:
                 return httpx.Response(503)
-            return httpx.Response(200, json={
+            return httpx.Response(200, json={**(rugcheck_extra or {}), **{
                 "token": {"decimals": 6, "mintAuthority": None, "freezeAuthority": None},
                 "mintAuthority": None, "freezeAuthority": None, "creator": "Dev1",
                 "transferFee": {"pct": 0, "authority": "11111111111111111111111111111111"},
@@ -56,19 +59,26 @@ def handler(fail_rugcheck=False, no_route=False):
                                {"owner": "W2", "address": "z", "pct": 2.0, "insider": False}],
                 "risks": [{"name": "Low amount of LP Providers", "level": "warn", "description": ""}],
                 "totalHolders": 1450,
-            })
+            }, **(rugcheck_extra or {})})
         if "/search" in url:
             return httpx.Response(200, json={"pairs": [pair()]})
         if "jup.ag" in url:
             if no_route:
                 return httpx.Response(400, json={"error": "No routes found", "errorCode": "COULD_NOT_FIND_ANY_ROUTE"})
-            return httpx.Response(200, json={"priceImpactPct": "0.0042"})
+            # constant-product pool: bigger orders get a worse rate; priceImpactPct is a constant (as seen live)
+            amount = int(request.url.params["amount"])
+            buying = request.url.params["inputMint"] == SOL
+            rate = (150 / 0.00042) * 1e6 / 1e9 if buying else (0.00042 / 150) * 1e9 / 1e6  # out units per in unit
+            usd = amount / 1e9 * 150 if buying else amount / 1e6 * 0.00042
+            out = amount * rate * (1 - usd / 60000)
+            return httpx.Response(200, json={"priceImpactPct": "0.0065", "outAmount": str(int(out))})
         return httpx.Response(404)
     return h
 
 
 def provider(**kw):
-    cfg = load_config(overrides={"data": {"retries": 1, "backoff_base_sec": 0.0, "rate_limits_per_min": {"api.geckoterminal.com": 100000}}})
+    cfg = load_config(overrides={"data": {"retries": 1, "backoff_base_sec": 0.0, "rate_limit_wait_sec": 0.0,
+                                          "rate_limits_per_min": {"api.geckoterminal.com": 100000}}})
     return SolanaFreeProvider(cfg, transport=httpx.MockTransport(handler(**kw)))
 
 
@@ -101,7 +111,9 @@ async def test_safety_parse_and_gatekeeper():
     assert block.verdict != "REJECT", block.hard_fails
     assert "social_authenticity" in block.category_scores and block.unknowns  # free data leaves gaps
     buy, sell = await p.quote_impacts(s, 20)
-    assert round(buy, 2) == 0.42 and round(sell, 2) == 0.42
+    assert 0.02 < buy < 0.04 and 0.02 < sell < 0.04  # measured size impact, not Jupiter's constant 0.65%
+    big_buy, _ = await p.quote_impacts(s, 2000)
+    assert big_buy > 3
     await p.close()
 
 
@@ -120,4 +132,52 @@ async def test_no_sell_route_is_honeypot():
     s = (await p.snapshots([MINT], True))[MINT]
     rep = await p.safety(s)
     assert rep.sell_simulation_ok is False
+    await p.close()
+
+
+async def test_expired_locker_does_not_fail_burned_lp():
+    """Live bug: an unrelated locker with an unlockDate in the past read as 'LP lock ends in 0 days'."""
+    p = provider(rugcheck_extra={"lockers": {"L1": {"unlockDate": 1743246940, "usdcLocked": 613}, "L2": {"unlockDate": 0}}})
+    s = (await p.snapshots([MINT], True))[MINT]
+    rep = await p.safety(s)
+    assert rep.lp_lock_days_remaining == float("inf")
+    await p.close()
+
+
+async def test_lp_judged_on_main_pool():
+    markets = [{"pubkey": "small", "lp": {"lpLockedPct": 100, "baseUSD": 1000, "quoteUSD": 1000}},
+               {"pubkey": POOL, "lp": {"lpLockedPct": 0, "baseUSD": 60000, "quoteUSD": 60000}}]
+    p = provider(rugcheck_extra={"markets": markets})
+    s = (await p.snapshots([MINT], True))[MINT]
+    assert (await p.safety(s)).lp_locked_pct == 0
+    await p.close()
+
+
+async def test_bogus_insider_network_ignored_and_creator_balance_used():
+    extra = {"token": {"decimals": 6, "supply": 1000, "mintAuthority": None, "freezeAuthority": None},
+             "insiderNetworks": [{"currentHolding": 1210}, {"currentHolding": 55}], "creatorBalance": 80}
+    p = provider(rugcheck_extra=extra)
+    s = (await p.snapshots([MINT], True))[MINT]
+    rep = await p.safety(s)
+    assert rep.insider_supply_pct == 5.5  # the 121% network is ignored
+    assert rep.dev_holding_pct == 8.0  # creatorBalance / supply
+    await p.close()
+
+
+async def test_rate_limited_request_is_retried():
+    calls = {"n": 0}
+    inner = handler()
+
+    def h(request):
+        if "ohlcv" in str(request.url):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return httpx.Response(429, headers={"Retry-After": "0"})
+        return inner(request)
+
+    cfg = load_config(overrides={"data": {"retries": 2, "backoff_base_sec": 0.0, "rate_limit_wait_sec": 0.0,
+                                          "rate_limits_per_min": {"api.geckoterminal.com": 100000}}})
+    p = SolanaFreeProvider(cfg, transport=httpx.MockTransport(h))
+    s = (await p.snapshots([MINT], True))[MINT]
+    assert calls["n"] == 2 and len(s.candles_5m) == 39
     await p.close()

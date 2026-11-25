@@ -70,7 +70,7 @@ memebot/
   loop.py              Orchestrator wiring it all together; state persisted to state/state.json
   data/solana_free.py  DEX Screener, GeckoTerminal, RugCheck, Jupiter adapters (no keys)
   data/sim.py          Deterministic simulated market with traps (rug, honeypot, mint, whale, copycat)
-tests/                 81 tests — at least one per hard rule, plus bots, adapters, end-to-end
+tests/                 85 tests — at least one per hard rule, plus bots, adapters, end-to-end
 ```
 
 ## How the hard rules are enforced
@@ -98,11 +98,14 @@ tests/                 81 tests — at least one per hard rule, plus bots, adapt
    from unknowns. To fill those fields, add paid sources (Birdeye, Helius, GMGN,
    Bubblemaps, an X/Telegram feed) in `data/solana_free.py`. The fields already
    exist on `TokenSnapshot` / `SafetyReport`.
-2. **The live adapters are untested against the real APIs.** The build
-   environment's network blocked them, so they are written from the documented
-   response formats and tested against mocks only. Run `memebot run` first
-   and watch for `UNKNOWN` warnings. Any field that won't parse fails safe
-   (REJECT), but check it anyway.
+2. **The live adapters were tested against the real APIs (Nov 2026).**
+   Testing found and fixed four problems: a false LP-lock hard fail from
+   expired lockers, Jupiter's `priceImpactPct` not reflecting order size (impact
+   is now measured against a small reference quote), a bogus RugCheck
+   insider network holding more than the whole supply, and GeckoTerminal 429s
+   below its documented limit (it is now capped at 10 req/min and waits out the
+   window). Free APIs change without notice, so watch the logs for `UNKNOWN`
+   warnings. Any field that won't parse fails safe (REJECT).
 3. **The Jupiter "sell simulation" is a proxy.** A quote proves a route exists,
    not that a signed sell would succeed. Freeze authority and Token-2022
    transfer hooks / permanent delegates (the main Solana honeypot mechanisms) are

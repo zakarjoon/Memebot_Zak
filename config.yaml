@@ -12,8 +12,9 @@ data:
   backoff_base_sec: 1.0      # 1s, 2s, 4s ...
   timeout_sec: 10
   discovery_limit: 30        # how many raw candidates to pull per scan before filtering
+  rate_limit_wait_sec: 20     # on HTTP 429 wait this long x attempt (or Retry-After)
   rate_limits_per_min:       # stay under each free API's published limit
-    api.geckoterminal.com: 25
+    api.geckoterminal.com: 10   # documented 30/min, but live tests hit 429s well below that
     api.dexscreener.com: 250
     api.rugcheck.xyz: 60
     lite-api.jup.ag: 50

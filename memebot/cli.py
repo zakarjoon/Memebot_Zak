@@ -80,6 +80,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # ---- run
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
+    logging.getLogger("httpx").setLevel(logging.DEBUG if args.verbose else logging.WARNING)
     confirmation = None
     if cfg.mode == "live":
         confirmation = input(f"Config says live mode. Type '{LIVE_PHRASE}' to continue: ").strip()
